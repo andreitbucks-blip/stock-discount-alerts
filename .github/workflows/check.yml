@@ -2,10 +2,11 @@ name: Discount Zone Check
 
 on:
 	schedule:
-		-cron: '35 14 * * 1-5'
-		-cron: '0 18 * * 1-5'
-		-cron: '5 21 * * 1-5'
-	workflow_dispatch: 
+	#Runs at 14:35, 18:00 and 21:05 UTC (adjust to your preferance times)
+		-cron: '35 14 * * 1-5'  # \` after US open
+		-cron: '0 18 * * 1-5'   # midday US
+		-cron: '5 21 * * 1-5'   # after US close
+	workflow_dispatch:          # allows manual run from GitHub
 	
 jobs:
 	check:
