@@ -1,24 +1,23 @@
 name: Discount Zone Check
 
 on:
-schedule:
-		#Runs at 14:35, 18:00 and 21:05 UTC
--cron: '35 14 * * 1-5'
--cron: '0 18 * * 1-5'
--cron: '5 21 * * 1-5'
-workflow_dispatch: 
-
+	schedule:
+		-cron: '35 14 * * 1-5'
+		-cron: '0 18 * * 1-5'
+		-cron: '5 21 * * 1-5'
+	workflow_dispatch: 
+	
 jobs:
-check:
-runs-on: ubuntu-latest
-steps:
--uses: actions/checkout@v4
--uses: actions/setup-python@v5
-with:
-python-version: '3.11'
--run: pip install -r requirements.txt
--name: Run checker
-env:
-NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-TICKERS: ${{ secrets.TICKERS }}
-run: python discount_checker.py
+	check:
+		runs-on: ubuntu-latest
+		steps:
+			-uses: actions/checkout@v4
+			-uses: actions/setup-python@v5
+			with:
+				python-version: '3.11'
+			-run: pip install -r requirements.txt
+			-name: Run checker
+			env:
+				NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+				TICKERS: ${{ secrets.TICKERS }}
+			run: python discount_checker.py
