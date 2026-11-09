@@ -56,6 +56,9 @@ def check_ticker(ticker):
         
         if df.empty or len(df) < SWING_LENGTH + 10:
             return None
+
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
         
         df = df.dropna()
         close = float(df["Close"].iloc[-1])
