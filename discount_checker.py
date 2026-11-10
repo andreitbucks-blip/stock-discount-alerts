@@ -9,7 +9,7 @@ import time
 # ====================== CONFIG ======================
 TICKERS_FILE = "tickers.txt"
 NTFY_TOPIC = os.getenv("NTFY_TOPIC")
-LOOKBACK_DAYS = 300
+LOOKBACK_DAYS = 250
 SWING_LENGTH = 40
 DISCOUNT_PERCENT = 0.35
 # ====================================================
@@ -19,12 +19,24 @@ def load_tickers():
         tickers = [line.strip().upper() for line in f if line.strip() and not line.startswith("#")]
     return list(dict.fromkeys(tickers))
 
-def analyze_ticker(ticker):
+def get_data(ticker):
+    """More reliable way to get data on GitHub Actions"""
     try:
-        df = yf.download(ticker, period=f"{LOOKBACK_DAYS}d", progress=False, auto_adjust=True, threads=False)
+        t = yf.Ticker(ticker)
+        df = t.history(period="1y", auto_adjust=True)
         if df is None or df.empty or len(df) < SWING_LENGTH + 5:
             return None
+        return df
+    except Exception as e:
+        print(f"{ticker} failed: {e}")
+        return None
 
+def analyze_ticker(ticker):
+    df = get_data(ticker)
+    if df is None:
+        return None
+
+    try:
         df = df.dropna()
         close = float(df["Close"].iloc[-1])
         high = df["High"]
@@ -47,22 +59,20 @@ def analyze_ticker(ticker):
             "zone_top": round(discount_top, 2),
             "distance_pct": round(distance_pct, 1)
         }
-    except Exception:
+    except Exception as e:
+        print(f"Analyze error {ticker}: {e}")
         return None
 
 def send_notification(message):
     if not NTFY_TOPIC:
-        print("ERROR: NTFY_TOPIC secret is missing")
+        print("ERROR: NTFY_TOPIC secret missing")
         return
     print(message)
     try:
         r = requests.post(
             f"https://ntfy.sh/{NTFY_TOPIC}",
             data=message.encode("utf-8"),
-            headers={
-                "Title": "Closest to Discount Zone",
-                "Priority": "high"
-            },
+            headers={"Title": "Closest to Discount Zone", "Priority": "high"},
             timeout=15
         )
         print(f"ntfy status: {r.status_code}")
@@ -81,13 +91,14 @@ def main():
         if res:
             results.append(res)
             success += 1
-        if (i + 1) % 10 == 0:
-            time.sleep(0.8)
+            print(f"OK: {ticker}")
+        if (i + 1) % 8 == 0:
+            time.sleep(1.2)
 
     print(f"Successfully analyzed: {success} tickers")
 
     if not results:
-        msg = f"No valid data returned from any ticker.\n{datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC"
+        msg = f"Still 0 valid tickers.\nCheck logs for errors.\n{datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC"
         send_notification(msg)
         return
 
