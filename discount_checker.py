@@ -7,99 +7,79 @@ import os
 import time
 
 # ====================== CONFIG ======================
-TICKERS_FILE = "tickers.txt"          # one ticker per line
-NTFY_TOPIC = os.getenv("NTFY_TOPIC")  # set this as GitHub Secret
-LOOKBACK_DAYS = 500
-SWING_LENGTH = 50                     # same as LuxAlgo default
-REQUIRE_SUPERTREND = False            # set True if you want Supertrend filter
+TICKERS_FILE = "tickers.txt"
+NTFY_TOPIC = os.getenv("NTFY_TOPIC")
+LOOKBACK_DAYS = 400
+SWING_LENGTH = 50          # same idea as LuxAlgo
+DISCOUNT_PERCENT = 0.30    # lower 30% of the swing range = Discount zone
 # ====================================================
 
 def load_tickers():
-    if not os.path.exists(TICKERS_FILE):
-        raise FileNotFoundError(f"{TICKERS_FILE} not found")
     with open(TICKERS_FILE) as f:
         tickers = [line.strip().upper() for line in f if line.strip() and not line.startswith("#")]
-    return list(dict.fromkeys(tickers))  # remove duplicates while keeping order
+    return list(dict.fromkeys(tickers))
 
 def get_swing_high_low(df, length=50):
-    """
-    Approximation of LuxAlgo swing logic.
-    Returns the most recent confirmed swing high and swing low.
-    """
     high = df["High"]
     low = df["Low"]
-    
-    # Simple but effective rolling extreme (close to LuxAlgo length-based swings)
-    swing_high = high.rolling(window=length, center=False).max().iloc[-1]
-    swing_low = low.rolling(window=length, center=False).min().iloc[-1]
-    
+    swing_high = high.rolling(window=length).max().iloc[-1]
+    swing_low = low.rolling(window=length).min().iloc[-1]
     return float(swing_high), float(swing_low)
 
 def is_in_discount_zone(close, swing_high, swing_low):
-    """
-    LuxAlgo-style Discount Zone:
-    Lower part of the range between recent swing high and swing low.
-    Original Pine uses roughly the bottom \~5% of the range.
-    """
     if swing_high <= swing_low or np.isnan(swing_high) or np.isnan(swing_low):
         return False, None, None
-    
-    # Exact formula matching the spirit of the Pine script
-    discount_top = 0.95 * swing_low + 0.05 * swing_high
-    in_zone = (close >= swing_low) and (close <= discount_top)
-    
+
+    range_size = swing_high - swing_low
+    discount_top = swing_low + (DISCOUNT_PERCENT * range_size)
+
+    in_zone = close <= discount_top
     return in_zone, swing_low, discount_top
 
 def check_ticker(ticker):
     try:
         df = yf.download(ticker, period=f"{LOOKBACK_DAYS}d", progress=False, auto_adjust=True, threads=False)
-        
-        if df.empty or len(df) < SWING_LENGTH + 10:
+        if df is None or df.empty or len(df) < SWING_LENGTH + 10:
             return None
 
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        
         df = df.dropna()
         close = float(df["Close"].iloc[-1])
-        
         swing_high, swing_low = get_swing_high_low(df, SWING_LENGTH)
         in_zone, zone_low, zone_top = is_in_discount_zone(close, swing_high, swing_low)
-        
+
         if not in_zone:
             return None
-        
+
         return {
             "ticker": ticker,
             "price": round(close, 2),
-            "swing_low": round(zone_low, 2),
-            "discount_top": round(zone_top, 2),
-            "swing_high": round(swing_high, 2)
+            "zone_low": round(zone_low, 2),
+            "zone_top": round(zone_top, 2)
         }
-    except Exception as e:
-        print(f"Error {ticker}: {e}")
+    except Exception:
         return None
 
 def send_notification(alerts):
     if not NTFY_TOPIC:
-        print("NTFY_TOPIC not set – printing only")
+        print("NTFY_TOPIC secret is missing")
         return
-    
-    header = f"{len(alerts)} stock(s) currently in Discount Zone\n{datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC\n\n"
+
+    header = f"{len(alerts)} stock(s) in Discount Zone\n{datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC\n\n"
     body = ""
     for a in alerts:
-        body += f"{a['ticker']}: ${a['price']}  | Zone: {a['swing_low']} – {a['discount_top']}\n"
-    
+        body += f"{a['ticker']}: ${a['price']} | Zone {a['zone_low']} - {a['zone_top']}\n"
+
     full_msg = header + body
     print(full_msg)
-    
+
+    # Important: use only normal ASCII characters
     requests.post(
         f"https://ntfy.sh/{NTFY_TOPIC}",
         data=full_msg.encode("utf-8"),
         headers={
-            "Title": "Discount Zone Alert – Exact Stocks",
+            "Title": "Discount Zone Alert",
             "Priority": "high",
-            "Tags": "chart_with_upwards_trend,moneybag"
+            "Tags": "chart_with_upwards_trend"
         }
     )
 
@@ -107,17 +87,15 @@ def main():
     print(f"Starting scan at {datetime.utcnow()} UTC")
     tickers = load_tickers()
     print(f"Loaded {len(tickers)} tickers")
-    
+
     alerts = []
     for i, ticker in enumerate(tickers):
         result = check_ticker(ticker)
         if result:
             alerts.append(result)
-        
-        # polite rate limiting
-        if (i + 1) % 12 == 0:
-            time.sleep(1.2)
-    
+        if (i + 1) % 15 == 0:
+            time.sleep(1.0)
+
     if alerts:
         send_notification(alerts)
     else:
@@ -125,4 +103,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
