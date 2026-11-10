@@ -11,10 +11,12 @@ TICKERS_FILE = "tickers.txt"
 NTFY_TOPIC = os.getenv("NTFY_TOPIC")
 LOOKBACK_DAYS = 400
 SWING_LENGTH = 50
-DISCOUNT_PERCENT = 0.30          # lower 30% of the range
+DISCOUNT_PERCENT = 0.30          # lower 30% of the swing range
 # ====================================================
 
 def load_tickers():
+    if not os.path.exists(TICKERS_FILE):
+        raise FileNotFoundError(f"{TICKERS_FILE} not found")
     with open(TICKERS_FILE) as f:
         tickers = [line.strip().upper() for line in f if line.strip() and not line.startswith("#")]
     return list(dict.fromkeys(tickers))
@@ -71,9 +73,9 @@ def send_notification(message):
             },
             timeout=15
         )
-        print(f"ntfy response: {r.status_code}")
+        print(f"ntfy response code: {r.status_code}")
     except Exception as e:
-        print(f"Failed to send notification: {e}")
+        print(f"Failed to send: {e}")
 
 def main():
     print(f"Starting scan at {datetime.utcnow()} UTC")
@@ -85,8 +87,8 @@ def main():
         result = check_ticker(ticker)
         if result:
             alerts.append(result)
-        if (i + 1) % 15 == 0:
-            time.sleep(0.8)
+        if (i + 1) % 12 == 0:
+            time.sleep(0.7)
 
     if alerts:
         msg = f"{len(alerts)} stock(s) in Discount Zone\n{datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC\n\n"
@@ -95,7 +97,6 @@ def main():
     else:
         msg = f"No stocks currently in the discount zone.\n{datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC"
 
-    # Always send a notification so we can test the phone
     send_notification(msg)
 
 if __name__ == "__main__":
