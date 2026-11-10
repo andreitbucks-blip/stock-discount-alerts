@@ -10,8 +10,8 @@ import time
 TICKERS_FILE = "tickers.txt"
 NTFY_TOPIC = os.getenv("NTFY_TOPIC")
 LOOKBACK_DAYS = 250
-SWING_LENGTH = 40
-DISCOUNT_PERCENT = 0.35
+SWING_LENGTH = 50              # matches LuxAlgo default
+DISCOUNT_PERCENT = 0.10        # lower 10% of the range (much tighter)
 # ====================================================
 
 def load_tickers():
@@ -20,7 +20,6 @@ def load_tickers():
     return list(dict.fromkeys(tickers))
 
 def get_data(ticker):
-    """More reliable way to get data on GitHub Actions"""
     try:
         t = yf.Ticker(ticker)
         df = t.history(period="1y", auto_adjust=True)
@@ -91,21 +90,20 @@ def main():
         if res:
             results.append(res)
             success += 1
-            print(f"OK: {ticker}")
         if (i + 1) % 8 == 0:
-            time.sleep(1.2)
+            time.sleep(1.1)
 
     print(f"Successfully analyzed: {success} tickers")
 
     if not results:
-        msg = f"Still 0 valid tickers.\nCheck logs for errors.\n{datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC"
+        msg = f"No valid data.\n{datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC"
         send_notification(msg)
         return
 
     results.sort(key=lambda x: x["distance_pct"])
     top5 = results[:5]
 
-    msg = f"Top 5 closest to Discount Zone\n{datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC\n\n"
+    msg = f"Top 5 closest to Discount Zone (10%)\n{datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC\n\n"
     for r in top5:
         status = "INSIDE" if r["distance_pct"] <= 0 else f"+{r['distance_pct']}%"
         msg += f"{r['ticker']}: ${r['price']} | {r['zone_low']}-{r['zone_top']} | {status}\n"
