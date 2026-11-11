@@ -10,18 +10,16 @@ import time
 TICKERS_FILE = "tickers.txt"
 NTFY_TOPIC = os.getenv("NTFY_TOPIC")
 
-LOOKBACK = "5y"              # long history so swings match TradingView better
-SWING_LENGTH = 50            # LuxAlgo default swing length
-DISCOUNT_PCT = 0.05          # exact LuxAlgo bottom 5%
+LOOKBACK = "5y"
+SWING_LENGTH = 50
+DISCOUNT_PCT = 0.05
 
-# Supertrend filter
 ST_LENGTH = 7
 ST_MULT = 2.0
 
-# Risk management
-SL_PCT = 0.035               # 3.5% stop
-TP1_PCT = 0.05               # +5%
-TP2_PCT = 0.10               # +10%
+SL_PCT = 0.035
+TP1_PCT = 0.05
+TP2_PCT = 0.10
 
 TOP_N = 5
 # ====================================================
@@ -33,10 +31,6 @@ def load_tickers():
 
 
 def find_trailing_extremes(df, size=50):
-    """
-    Improved LuxAlgo-style trailing high / low (from your attached script).
-    Detects confirmed swing points and then trails them.
-    """
     high = df["High"].values
     low = df["Low"].values
     n = len(df)
@@ -47,7 +41,6 @@ def find_trailing_extremes(df, size=50):
 
     for i in range(n):
         prev_leg = leg
-
         if i >= size:
             if high[i - size] > high[i - size + 1 : i + 1].max():
                 leg = 0
@@ -103,6 +96,57 @@ def calculate_supertrend(df, length=7, multiplier=2.0):
     return direction.iloc[-1] == 1
 
 
+def get_risk_and_estimate(ticker, current_price, df):
+    """Simple risk proxy + speculative 6-month range"""
+    risk = "Medium"
+    action = "Watch"
+    estimate = "N/A"
+
+    try:
+        info = yf.Ticker(ticker).info
+
+        # --- Simple Financial Risk Proxy ---
+        debt_to_equity = info.get("debtToEquity", None)
+        current_ratio = info.get("currentRatio", None)
+        total_cash = info.get("totalCash", 0) or 0
+        total_debt = info.get("totalDebt", 0) or 0
+
+        score = 0
+        if debt_to_equity is not None:
+            if debt_to_equity > 200:
+                score += 2
+            elif debt_to_equity > 100:
+                score += 1
+        if current_ratio is not None:
+            if current_ratio < 1.0:
+                score += 2
+            elif current_ratio < 1.5:
+                score += 1
+        if total_debt > 0 and total_cash / total_debt < 0.2:
+            score += 1
+
+        if score >= 3:
+            risk = "Elevated"
+        elif score == 0:
+            risk = "Low"
+        else:
+            risk = "Medium"
+
+        # --- Speculative 6-month range (based on recent volatility) ---
+        returns = df["Close"].pct_change().dropna()
+        if len(returns) > 20:
+            daily_vol = returns.std()
+            six_month_vol = daily_vol * np.sqrt(126)  # ~6 months of trading days
+            low_est = current_price * (1 - 1.0 * six_month_vol)
+            high_est = current_price * (1 + 1.0 * six_month_vol)
+            estimate = f"${low_est:.0f} - ${high_est:.0f} (speculative)"
+
+    except Exception:
+        pass
+
+    return risk, estimate
+
+
 def analyze_ticker(ticker):
     try:
         t = yf.Ticker(ticker)
@@ -116,11 +160,9 @@ def analyze_ticker(ticker):
         open_ = float(df["Open"].iloc[-1])
         volume = float(df["Volume"].iloc[-1])
 
-        # Supertrend must be bullish
         if not calculate_supertrend(df, ST_LENGTH, ST_MULT):
             return None
 
-        # LuxAlgo-style trailing extremes
         swing_high, swing_low = find_trailing_extremes(df, SWING_LENGTH)
         if swing_high is None or swing_low is None or swing_high <= swing_low:
             return None
@@ -128,21 +170,29 @@ def analyze_ticker(ticker):
         swing_high = float(swing_high)
         swing_low = float(swing_low)
 
-        # Exact LuxAlgo discount zone (bottom 5%)
         discount_top = (1 - DISCOUNT_PCT) * swing_low + DISCOUNT_PCT * swing_high
         in_zone = close <= discount_top
 
-        # Volume confirmation
         volume_ma20 = float(df["Volume"].rolling(20).mean().iloc[-1])
         volume_ok = volume > volume_ma20
-
-        # Bullish candle
         bullish_candle = close > open_
 
-        # Final buy signal
         is_buy = in_zone and bullish_candle and volume_ok
 
         distance_pct = ((close - discount_top) / discount_top) * 100 if discount_top > 0 else 999
+
+        # Extra analysis
+        risk, estimate = get_risk_and_estimate(ticker, close, df)
+
+        # Action logic
+        if is_buy:
+            action = "Buy"
+        elif in_zone:
+            action = "Hold"
+        elif distance_pct < 8:
+            action = "Watch"
+        else:
+            action = "Avoid"
 
         return {
             "ticker": ticker,
@@ -154,7 +204,10 @@ def analyze_ticker(ticker):
             "is_buy": is_buy,
             "stop_loss": round(close * (1 - SL_PCT), 2),
             "tp1": round(close * (1 + TP1_PCT), 2),
-            "tp2": round(close * (1 + TP2_PCT), 2)
+            "tp2": round(close * (1 + TP2_PCT), 2),
+            "risk": risk,
+            "action": action,
+            "estimate": estimate
         }
 
     except Exception as e:
@@ -195,24 +248,25 @@ def main():
                 buys.append(res)
                 print(f"BUY → {ticker}")
         if (i + 1) % 8 == 0:
-            time.sleep(1.0)
+            time.sleep(1.2)
 
     print(f"Valid: {len(results)} | Buys: {len(buys)}")
     stamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
 
-    # Case A – Buy signals
+    # ===== CASE A: Buy signals =====
     if buys:
         msg = f"{len(buys)} BUY SIGNAL(S)\n{stamp} UTC\n\n"
         for b in buys:
             msg += (
-                f"{b['ticker']}: ${b['price']}\n"
+                f"{b['ticker']}: ${b['price']} | Action: {b['action']}\n"
                 f"  Zone: {b['zone_low']} - {b['zone_top']}\n"
-                f"  SL: ${b['stop_loss']} | TP1: ${b['tp1']} | TP2: ${b['tp2']}\n\n"
+                f"  SL: ${b['stop_loss']} | TP1: ${b['tp1']} | TP2: ${b['tp2']}\n"
+                f"  Risk: {b['risk']} | 6m est: {b['estimate']}\n\n"
             )
         send_notification(msg)
         return
 
-    # Case B – Top 5 closest
+    # ===== CASE B: Top 5 closest =====
     if not results:
         send_notification(f"No valid data\n{stamp} UTC")
         return
@@ -220,10 +274,14 @@ def main():
     results.sort(key=lambda x: x["distance_pct"])
     top5 = results[:TOP_N]
 
-    msg = f"No buys – Top {TOP_N} closest to Discount Zone\n{stamp} UTC\n\n"
+    msg = f"No buys – Top {TOP_N} closest\n{stamp} UTC\n\n"
     for r in top5:
         status = "INSIDE" if r["in_zone"] else f"+{r['distance_pct']}%"
-        msg += f"{r['ticker']}: ${r['price']} | {r['zone_low']}-{r['zone_top']} | {status}\n"
+        msg += (
+            f"{r['ticker']}: ${r['price']} | {status} | Action: {r['action']}\n"
+            f"  Zone: {r['zone_low']}-{r['zone_top']}\n"
+            f"  Risk: {r['risk']} | 6m est: {r['estimate']}\n\n"
+        )
 
     send_notification(msg)
 
