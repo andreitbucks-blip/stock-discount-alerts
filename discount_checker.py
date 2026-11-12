@@ -23,6 +23,9 @@ SL_PCT = 0.035
 TP1_PCT = 0.05
 TP2_PCT = 0.10
 TOP_N = 5
+
+MAX_RETRIES = 8          # how many times to retry Gemini
+RETRY_DELAY = 25         # seconds between retries
 # ====================================================
 
 def load_tickers():
@@ -133,7 +136,7 @@ def analyze_ticker(ticker):
 
 
 def call_gemini(tickers_data):
-    """Send the prompt + tickers to Gemini and return the analysis"""
+    """Call Gemini with retries until success"""
     if not GEMINI_API_KEY:
         return "Gemini API key missing"
 
@@ -161,42 +164,55 @@ Stocks to analyze:
 """
 
     url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
-
     headers = {
         "Content-Type": "application/json",
         "X-goog-api-key": GEMINI_API_KEY
     }
-
     payload = {
-        "contents": [{
-            "parts": [{"text": full_prompt}]
-        }],
+        "contents": [{"parts": [{"text": full_prompt}]}],
         "generationConfig": {
             "temperature": 0.3,
             "maxOutputTokens": 3000
         }
     }
 
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=180)  # increased to 3 minutes
-        if response.status_code == 200:
-            data = response.json()
-            return data["candidates"][0]["content"]["parts"][0]["text"]
-        else:
-            return f"Gemini error {response.status_code}: {response.text[:400]}"
-    except Exception as e:
-        return f"Gemini call failed: {str(e)}"
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            print(f"Gemini attempt {attempt}/{MAX_RETRIES}...")
+            response = requests.post(url, headers=headers, json=payload, timeout=180)
+
+            if response.status_code == 200:
+                data = response.json()
+                text = data["candidates"][0]["content"]["parts"][0]["text"]
+                print("Gemini success!")
+                return text
+
+            # Retry on 503 or 429
+            if response.status_code in [429, 503]:
+                print(f"Gemini {response.status_code} - high demand. Waiting {RETRY_DELAY}s...")
+                time.sleep(RETRY_DELAY)
+                continue
+            else:
+                return f"Gemini error {response.status_code}: {response.text[:400]}"
+
+        except requests.exceptions.Timeout:
+            print(f"Timeout on attempt {attempt}. Retrying...")
+            time.sleep(RETRY_DELAY)
+        except Exception as e:
+            print(f"Error on attempt {attempt}: {e}")
+            time.sleep(RETRY_DELAY)
+
+    return "Gemini failed after multiple retries (high demand)."
 
 
 def send_notification(message):
     if not NTFY_TOPIC:
         print("NTFY_TOPIC missing")
         return
-    print(message[:2000] + ("..." if len(message) > 2000 else ""))
+    print(message[:1500] + ("..." if len(message) > 1500 else ""))
     try:
-        # ntfy has a practical size limit, so we truncate very long AI answers
-        if len(message) > 3500:
-            message = message[:3400] + "\n\n[AI analysis truncated]"
+        if len(message) > 3800:
+            message = message[:3700] + "\n\n[AI analysis truncated due to length]"
         r = requests.post(
             f"https://ntfy.sh/{NTFY_TOPIC}",
             data=message.encode("utf-8"),
@@ -228,7 +244,6 @@ def main():
     print(f"Valid: {len(results)} | Buys: {len(buys)}")
     stamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
 
-    # Decide what to analyze with AI
     if buys:
         to_analyze = buys
         header = f"{len(buys)} BUY SIGNAL(S) + AI Analysis\n{stamp} UTC\n\n"
@@ -240,7 +255,6 @@ def main():
         send_notification(f"No valid data\n{stamp} UTC")
         return
 
-    # Basic info first
     basic = ""
     for item in to_analyze:
         status = "BUY" if item["is_buy"] else f"+{item['distance_pct']}%"
@@ -249,7 +263,7 @@ def main():
             basic += f"  SL: ${item['stop_loss']} | TP1: ${item['tp1']} | TP2: ${item['tp2']}\n"
         basic += "\n"
 
-    print("Calling Gemini for analysis...")
+    print("Calling Gemini (with retries)...")
     ai_analysis = call_gemini(to_analyze)
 
     full_message = header + basic + "\n——— AI ANALYSIS ——\n\n" + ai_analysis
