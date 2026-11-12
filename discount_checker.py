@@ -133,37 +133,30 @@ def analyze_ticker(ticker):
 
 
 def call_gemini(tickers_data):
-    """Send the exact user prompt + tickers to Gemini and return the analysis"""
+    """Send the prompt + tickers to Gemini and return the analysis"""
     if not GEMINI_API_KEY:
         return "Gemini API key missing"
 
     ticker_list = ""
     for item in tickers_data:
-        ticker_list += f"- {item['ticker']}: Current Price ${item['price']}, Discount Zone {item['zone_low']}-{item['zone_top']}\n"
+        ticker_list += f"- {item['ticker']}: ${item['price']} | Zone {item['zone_low']}-{item['zone_top']}\n"
 
-    full_prompt = f"""Act as an institutional swing trader and equity research analyst. Your objective is to evaluate the stock tickers provided at the end of this prompt for a short-to-mid-term swing trade (holding period: 1 day to 1 month) at a discounted price zone.
+    full_prompt = f"""Act as an institutional swing trader. Evaluate the following stocks for a short-to-mid-term swing trade (1 day – 1 month) while they are near a discount zone.
 
-### Ground Rules
-- Use live web search/market data to verify all current prices, dates, and news. State the timestamp of the price data used.
-- Do not invent or guess technical indicators, volume figures, or dates. If real-time chart data is unavailable, explicitly state what you cannot see.
-- Separate verified facts from your trading assumptions.
+For EACH ticker provide:
 
-### Analysis Checklist
-Evaluate each stock across these 8 criteria:
+**VERDICT: BUY / WAIT / PASS**
+- 2-sentence summary of main risk & reward
+- Catalyst (temporary panic or broken business?)
+- Next binary event in the next 30 days
+- Exact invalidation (stop) price
+- Suggested target (1-month)
+- Risk:Reward ratio
+- Liquidity note (avg volume)
 
-1. **Catalyst Check (Temporary Panic vs. Broken Business):** Identify why the stock recently dropped. Determine if the sell-off is driven by temporary market overreaction/macro drag or a structural business breakdown.
-2. **Binary Event Risk:** Check the calendar for the next 30 days. List any upcoming earnings dates, FDA rulings, court verdicts, or major product/macro events that create overnight gap risk.
-3. **Volume & Support Validation:** Identify the current discounted support zone. Verify whether past price action shows heavy historical buying volume at this exact price level.
-4. **Reversal Confirmation:** Assess whether selling pressure is exhausted. Look for bullish reversal signals.
-5. **Broader Market Context:** Check the current short-term trend of the S&P 500 (SPY) and the stock's specific sector ETF.
-6. **Exact Invalidation Point:** Define the exact price level below the support zone where the bounce thesis fails.
-7. **Risk-to-Reward Ratio (Minimum 1:2):** Calculate a concrete trade setup.
-8. **Liquidity Check:** Verify average daily trading volume.
+Keep the answer concise and structured.
 
-### Final Output Format
-For each ticker start with a bold **VERDICT: BUY / WAIT / PASS**, followed by a 2-sentence summary, then the numbered breakdown 1–8.
-
-Analyze these Stock Tickers:
+Stocks to analyze:
 {ticker_list}
 """
 
@@ -179,13 +172,13 @@ Analyze these Stock Tickers:
             "parts": [{"text": full_prompt}]
         }],
         "generationConfig": {
-            "temperature": 0.4,
-            "maxOutputTokens": 4096
+            "temperature": 0.3,
+            "maxOutputTokens": 3000
         }
     }
 
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=90)
+        response = requests.post(url, headers=headers, json=payload, timeout=180)  # increased to 3 minutes
         if response.status_code == 200:
             data = response.json()
             return data["candidates"][0]["content"]["parts"][0]["text"]
