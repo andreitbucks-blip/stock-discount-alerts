@@ -5,12 +5,11 @@ from datetime import datetime
 import requests
 import os
 import time
-import json
 
 # ====================== CONFIG ======================
 TICKERS_FILE = "tickers.txt"
 NTFY_TOPIC = os.getenv("NTFY_TOPIC")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 LOOKBACK = "5y"
 SWING_LENGTH = 50
@@ -24,8 +23,8 @@ TP1_PCT = 0.05
 TP2_PCT = 0.10
 TOP_N = 5
 
-MAX_RETRIES = 8          # how many times to retry Gemini
-RETRY_DELAY = 25         # seconds between retries
+MAX_RETRIES = 6
+RETRY_DELAY = 15
 # ====================================================
 
 def load_tickers():
@@ -135,16 +134,16 @@ def analyze_ticker(ticker):
         return None
 
 
-def call_gemini(tickers_data):
-    """Call Gemini with retries until success"""
-    if not GEMINI_API_KEY:
-        return "Gemini API key missing"
+def call_groq(tickers_data):
+    """Call Groq with retries"""
+    if not GROQ_API_KEY:
+        return "GROQ_API_KEY is missing"
 
     ticker_list = ""
     for item in tickers_data:
         ticker_list += f"- {item['ticker']}: ${item['price']} | Zone {item['zone_low']}-{item['zone_top']}\n"
 
-    full_prompt = f"""Act as an institutional swing trader. Evaluate the following stocks for a short-to-mid-term swing trade (1 day – 1 month) while they are near a discount zone.
+    prompt = f"""Act as an institutional swing trader. Evaluate the following stocks for a short-to-mid-term swing trade (1 day – 1 month) while they are near a discount zone.
 
 For EACH ticker provide:
 
@@ -155,7 +154,7 @@ For EACH ticker provide:
 - Exact invalidation (stop) price
 - Suggested target (1-month)
 - Risk:Reward ratio
-- Liquidity note (avg volume)
+- Liquidity note
 
 Keep the answer concise and structured.
 
@@ -163,46 +162,44 @@ Stocks to analyze:
 {ticker_list}
 """
 
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
+    url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
-        "Content-Type": "application/json",
-        "X-goog-api-key": GEMINI_API_KEY
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
     }
     payload = {
-        "contents": [{"parts": [{"text": full_prompt}]}],
-        "generationConfig": {
-            "temperature": 0.3,
-            "maxOutputTokens": 3000
-        }
+        "model": "llama-3.3-70b-versatile",
+        "messages": [
+            {"role": "system", "content": "You are a professional equity research analyst and swing trader."},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.3,
+        "max_tokens": 3000
     }
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            print(f"Gemini attempt {attempt}/{MAX_RETRIES}...")
-            response = requests.post(url, headers=headers, json=payload, timeout=180)
+            print(f"Groq attempt {attempt}/{MAX_RETRIES}...")
+            response = requests.post(url, headers=headers, json=payload, timeout=60)
 
             if response.status_code == 200:
                 data = response.json()
-                text = data["candidates"][0]["content"]["parts"][0]["text"]
-                print("Gemini success!")
+                text = data["choices"][0]["message"]["content"]
+                print("Groq success!")
                 return text
 
-            # Retry on 503 or 429
-            if response.status_code in [429, 503]:
-                print(f"Gemini {response.status_code} - high demand. Waiting {RETRY_DELAY}s...")
+            if response.status_code in [429, 503, 502]:
+                print(f"Groq {response.status_code} - retrying in {RETRY_DELAY}s...")
                 time.sleep(RETRY_DELAY)
                 continue
             else:
-                return f"Gemini error {response.status_code}: {response.text[:400]}"
+                return f"Groq error {response.status_code}: {response.text[:400]}"
 
-        except requests.exceptions.Timeout:
-            print(f"Timeout on attempt {attempt}. Retrying...")
-            time.sleep(RETRY_DELAY)
         except Exception as e:
             print(f"Error on attempt {attempt}: {e}")
             time.sleep(RETRY_DELAY)
 
-    return "Gemini failed after multiple retries (high demand)."
+    return "Groq failed after multiple retries."
 
 
 def send_notification(message):
@@ -212,7 +209,7 @@ def send_notification(message):
     print(message[:1500] + ("..." if len(message) > 1500 else ""))
     try:
         if len(message) > 3800:
-            message = message[:3700] + "\n\n[AI analysis truncated due to length]"
+            message = message[:3700] + "\n\n[AI analysis truncated]"
         r = requests.post(
             f"https://ntfy.sh/{NTFY_TOPIC}",
             data=message.encode("utf-8"),
@@ -263,8 +260,8 @@ def main():
             basic += f"  SL: ${item['stop_loss']} | TP1: ${item['tp1']} | TP2: ${item['tp2']}\n"
         basic += "\n"
 
-    print("Calling Gemini (with retries)...")
-    ai_analysis = call_gemini(to_analyze)
+    print("Calling Groq...")
+    ai_analysis = call_groq(to_analyze)
 
     full_message = header + basic + "\n——— AI ANALYSIS ——\n\n" + ai_analysis
     send_notification(full_message)
