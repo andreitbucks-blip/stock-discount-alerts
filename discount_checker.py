@@ -137,7 +137,6 @@ def call_gemini(tickers_data):
     if not GEMINI_API_KEY:
         return "Gemini API key missing"
 
-    # Build the list of tickers with current data
     ticker_list = ""
     for item in tickers_data:
         ticker_list += f"- {item['ticker']}: Current Price ${item['price']}, Discount Zone {item['zone_low']}-{item['zone_top']}\n"
@@ -168,8 +167,13 @@ Analyze these Stock Tickers:
 {ticker_list}
 """
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
-    
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-goog-api-key": GEMINI_API_KEY
+    }
+
     payload = {
         "contents": [{
             "parts": [{"text": full_prompt}]
@@ -181,12 +185,12 @@ Analyze these Stock Tickers:
     }
 
     try:
-        response = requests.post(url, json=payload, timeout=90)
+        response = requests.post(url, headers=headers, json=payload, timeout=90)
         if response.status_code == 200:
             data = response.json()
             return data["candidates"][0]["content"]["parts"][0]["text"]
         else:
-            return f"Gemini error {response.status_code}: {response.text[:300]}"
+            return f"Gemini error {response.status_code}: {response.text[:400]}"
     except Exception as e:
         return f"Gemini call failed: {str(e)}"
 
