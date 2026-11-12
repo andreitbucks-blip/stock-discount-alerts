@@ -2,14 +2,12 @@ name: Discount Zone Check
 
 on:
   schedule:
-    - cron: '35 14 * * 1-5'
-    - cron: '0 18 * * 1-5'
-    - cron: '5 21 * * 1-5'
+    - cron: '30 14 * * 1-5'   # 16:30 Romanian time (EET) on weekdays only
   workflow_dispatch:
 
 jobs:
   check:
-    runs-on: ubuntu-24.04  
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -24,4 +22,5 @@ jobs:
       - name: Run discount checker
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python discount_checker.py
