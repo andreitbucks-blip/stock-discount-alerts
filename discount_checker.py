@@ -135,7 +135,7 @@ def analyze_ticker(ticker):
 
 
 def call_groq(tickers_data):
-    """Call Groq with retries"""
+    """Call Groq with multiple model fallbacks"""
     if not GROQ_API_KEY:
         return "GROQ_API_KEY is missing"
 
@@ -162,45 +162,53 @@ Stocks to analyze:
 {ticker_list}
 """
 
+    models_to_try = [
+        "openai/gpt-oss-20b",
+        "openai/gpt-oss-120b",
+        "qwen/qwen3.8-27b",
+        "gemma2-9b-it"
+    ]
+
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
-    payload = {
-        "model": "mixtral-8x7b-32768",
-        "messages": [
-            {"role": "system", "content": "You are a professional equity research analyst and swing trader."},
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0.3,
-        "max_tokens": 3000
-    }
 
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            print(f"Groq attempt {attempt}/{MAX_RETRIES}...")
-            response = requests.post(url, headers=headers, json=payload, timeout=60)
+    for model in models_to_try:
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "You are a professional equity research analyst and swing trader."},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.3,
+            "max_tokens": 3000
+        }
 
-            if response.status_code == 200:
-                data = response.json()
-                text = data["choices"][0]["message"]["content"]
-                print("Groq success!")
-                return text
+        for attempt in range(1, 4):
+            try:
+                print(f"Trying model {model} (attempt {attempt})...")
+                response = requests.post(url, headers=headers, json=payload, timeout=60)
 
-            if response.status_code in [429, 503, 502]:
-                print(f"Groq {response.status_code} - retrying in {RETRY_DELAY}s...")
-                time.sleep(RETRY_DELAY)
-                continue
-            else:
-                return f"Groq error {response.status_code}: {response.text[:400]}"
+                if response.status_code == 200:
+                    data = response.json()
+                    text = data["choices"][0]["message"]["content"]
+                    print(f"Success with model: {model}")
+                    return text
 
-        except Exception as e:
-            print(f"Error on attempt {attempt}: {e}")
-            time.sleep(RETRY_DELAY)
+                if response.status_code in [429, 503]:
+                    time.sleep(12)
+                    continue
+                else:
+                    print(f"Model {model} failed: {response.status_code}")
+                    break   # try next model
 
-    return "Groq failed after multiple retries."
+            except Exception as e:
+                print(f"Error with {model}: {e}")
+                time.sleep(8)
 
+    return "All Groq models failed. Please check your API key or try again later."
 
 def send_notification(message):
     if not NTFY_TOPIC:
