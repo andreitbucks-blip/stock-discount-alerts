@@ -168,7 +168,7 @@ Stocks to analyze:
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "llama-3.1-8b-instant",
+        "model": "mixtral-8x7b-32768",
         "messages": [
             {"role": "system", "content": "You are a professional equity research analyst and swing trader."},
             {"role": "user", "content": prompt}
