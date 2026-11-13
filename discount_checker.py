@@ -135,7 +135,7 @@ def analyze_ticker(ticker):
 
 
 def call_groq(tickers_data):
-    """Call Groq with multiple model fallbacks"""
+    """Call Groq with multiple model fallbacks + better debugging"""
     if not GROQ_API_KEY:
         return "GROQ_API_KEY is missing"
 
@@ -179,36 +179,48 @@ Stocks to analyze:
         payload = {
             "model": model,
             "messages": [
-                {"role": "system", "content": "You are a professional equity research analyst and swing trader."},
+                {"role": "system", "content": "You are a professional equity research analyst and swing trader. Always give a full analysis."},
                 {"role": "user", "content": prompt}
             ],
-            "temperature": 0.3,
-            "max_tokens": 3000
+            "temperature": 0.4,
+            "max_tokens": 2500
         }
 
-        for attempt in range(1, 4):
+        for attempt in range(1, 3):
             try:
                 print(f"Trying model {model} (attempt {attempt})...")
                 response = requests.post(url, headers=headers, json=payload, timeout=60)
 
+                print(f"Status code: {response.status_code}")
+
                 if response.status_code == 200:
                     data = response.json()
-                    text = data["choices"][0]["message"]["content"]
-                    print(f"Success with model: {model}")
-                    return text
+                    print(f"Raw response keys: {list(data.keys())}")
 
-                if response.status_code in [429, 503]:
-                    time.sleep(12)
-                    continue
+                    # More robust extraction
+                    try:
+                        text = data["choices"][0]["message"]["content"]
+                    except Exception:
+                        text = str(data)[:800]
+
+                    if text and len(text.strip()) > 30:
+                        print(f"Success with model: {model} | Length: {len(text)}")
+                        return text
+                    else:
+                        print(f"Empty content from {model}. Full response: {str(data)[:500]}")
+                        break  # try next model
                 else:
-                    print(f"Model {model} failed: {response.status_code}")
-                    break   # try next model
+                    print(f"Error {response.status_code}: {response.text[:300]}")
+                    if response.status_code in [429, 503]:
+                        time.sleep(10)
+                        continue
+                    break
 
             except Exception as e:
-                print(f"Error with {model}: {e}")
+                print(f"Exception with {model}: {e}")
                 time.sleep(8)
 
-    return "All Groq models failed. Please check your API key or try again later."
+    return "All Groq models returned empty or failed."
 
 def send_notification(message):
     if not NTFY_TOPIC:
